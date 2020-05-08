@@ -1,0 +1,369 @@
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Data;
+using System.Drawing;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using System.Net.Sockets;
+using System.Net;
+using System.Security.Cryptography;
+using System.Xml;
+using System.IO;
+using System.Security;
+
+namespace chatRSAv2
+{
+    public partial class Form1 : Form
+    {
+
+        public struct public_key_others
+        {
+            public string public_key, IP_others;
+            public public_key_others(string ip, string key)
+            {
+                IP_others = ip;
+                public_key = key;
+            }
+        }
+
+        List<public_key_others> mylist = new List<public_key_others>();
+        byte[] DecryptedData;
+        string publickey = "";
+        string privatekey = "";
+
+        bool alive = false; // будет ли работать поток для приема
+        UdpClient client;
+        const int LOCALPORT = 81; // порт для приема сообщений
+        const int REMOTEPORT = 81; // порт для отправки сообщений
+        const int TTL = 20;
+        const string HOST = "230.13.12.7"; // хост для групповой рассылки
+        IPAddress groupAddress; // адрес для групповой рассылки
+
+        string userName; // имя пользователя в чате
+
+        public Form1()
+        {
+            InitializeComponent();
+            groupAddress = IPAddress.Parse(HOST);
+        }
+
+        private void Form1_Load(object sender, EventArgs e)
+        {
+            //client = new UdpClient(LOCALPORT);
+            //// присоединяемся к групповой рассылке
+            //client.JoinMulticastGroup(groupAddress, TTL);
+
+            //// запускаем задачу на прием сообщений
+            //Task receiveTask = new Task(ReceiveMessages);
+            //receiveTask.Start();
+
+            RSACryptoServiceProvider RsaKey = new RSACryptoServiceProvider();
+            publickey = RsaKey.ToXmlString(false);
+            privatekey = RsaKey.ToXmlString(true);
+
+        }
+
+            
+        private void button1_Click(object sender, EventArgs e)
+        {//отправить
+           //byte[] data = new byte[1024];
+            RSACryptoServiceProvider RSA = new RSACryptoServiceProvider();
+           
+            try
+            {
+                string message = String.Format("{0}: {1}", userName, textBox2.Text);
+                //byte[] data = Encoding.Unicode.GetBytes(message);
+                byte[] input = Encoding.UTF8.GetBytes(message);
+                byte[] output;
+
+                for(int i = 0; i < mylist.Count; i++)
+                {
+                   // MessageBox.Show(mylist[i].public_key);
+                    RSA.FromXmlString(mylist[i].public_key);
+                    output = RSA.Encrypt(input,  false); 
+                    client.Send(output, output.Length, HOST, REMOTEPORT);
+                }
+                textBox2.Clear();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message);
+            }
+        }
+        //отправка ip и ключа в ответ
+        private void answerInc(string ip)
+
+        {   // отправляем первое сообщение о входе нового пользователя
+            string message = userName + "обмен";
+            //string pkey = Convert.ToString(publicKey);
+            //string messageIP = message + " ip" + ownIP + " key" + publickey + "";
+            string messageIP = message + "(" + LocalIPAddress() + ";" + publickey + ")";
+            byte[] data = Encoding.Unicode.GetBytes(messageIP);
+            //byte[] data = Encoding.UTF8.GetBytes(messageIP);
+            MessageBox.Show("отправка в ответ " + messageIP);
+            client.Send(data, data.Length, ip, REMOTEPORT);
+
+        }
+
+        //проверка на повторяющиеся записи в списке участников чата
+
+        private void ReceiveMessages()
+        {//получить
+            alive = true;     
+            try
+            {
+                while (alive)
+                {
+                    IPEndPoint remoteIp = null;
+                    byte[] data = client.Receive(ref remoteIp);
+                    int index_lparrow, index_char, index_rparrow;
+                    string other_IP, other_key;
+                    string message = Encoding.Unicode.GetString(data);
+                    byte[] output = new byte[1464];
+                    RSACryptoServiceProvider rsa = new RSACryptoServiceProvider();
+                    try
+                    {
+                        string buf1 = "вошел в чат";
+                        string buf2 = "обмен";
+                        string buf3 = "покидает чат";
+                        if (message.Contains(buf1))
+                        {
+                            try
+                            {
+                                index_lparrow = message.IndexOf("(");
+                                index_char = message.IndexOf(";");
+                                index_rparrow = message.IndexOf(")");
+                                other_IP = message.Substring(index_lparrow + 1, index_char - index_lparrow - 1);
+                                other_key = message.Substring(index_char + 1, index_rparrow - index_char - 1);
+                                if(other_IP == LocalIPAddress()) mylist.Add(new public_key_others(other_IP, other_key));
+                                message = message.Substring(0, index_lparrow);
+
+                                for (int i = 0; i < mylist.Count; i++)
+                                {
+                                    
+                                    if (mylist[i].IP_others == other_IP)
+                                    {
+                                        var str = mylist[i];
+                                        str.public_key = other_key;
+                                        mylist[i] = str;
+                                    } 
+                                    else
+                                        mylist.Add(new public_key_others(other_IP, other_key));
+
+                                }
+
+                                //if(other_IP != LocalIPAddress())
+                                //{
+                                //    string msg = userName + " вошел в чат";
+                                //    string messageIP = msg + "(" + LocalIPAddress() + ";" + publickey + ")";
+                                //    byte[] one = Encoding.Unicode.GetBytes(messageIP);
+                                //    client.Send(one, one.Length, other_IP, REMOTEPORT);
+                                //}
+                                
+                                // добавляем полученное сообщение в текстовое поле
+                                this.Invoke(new MethodInvoker(() =>
+                                {
+                                    string time = DateTime.Now.ToShortTimeString();
+                                    listBox2.Items.Add(time + " " + message);
+                                }));
+                            }
+                            catch
+                            {
+
+                                // добавляем полученное сообщение в текстовое поле
+                                this.Invoke(new MethodInvoker(() =>
+                                {
+                                    string time = DateTime.Now.ToShortTimeString();
+                                    listBox2.Items.Add(time + " " + message);
+                                }));
+                            }
+                        }
+                        else if (message.Contains(buf2))
+                        {
+                            index_lparrow = message.IndexOf("(");
+                            index_char = message.IndexOf(";");
+                            index_rparrow = message.IndexOf(")");
+                            other_IP = message.Substring(index_lparrow + 1, index_char - index_lparrow - 1);
+                            other_key = message.Substring(index_char + 1, index_rparrow - index_char - 1);
+                            answerInc(other_IP);
+                        }
+                        else if (message.Contains(buf3)) //тут уже с выходом из чата
+                        {
+                            index_lparrow = message.IndexOf("(");
+                            index_char = message.IndexOf(";");
+                            index_rparrow = message.IndexOf(")");
+                            other_IP = message.Substring(index_lparrow + 1, index_char - index_lparrow - 1);
+                            other_key = message.Substring(index_char + 1, index_rparrow - index_char - 1);
+
+                            message = message.Substring(0, index_lparrow);
+                            //checkPart(neighbor, false);
+                            
+                            
+                            // добавляем полученное сообщение в текстовое поле
+                            this.Invoke(new MethodInvoker(() =>
+                            {
+                                string time = DateTime.Now.ToShortTimeString();
+                                listBox2.Items.Add(time + " | " + message);
+                                //chatTextBox.Text = time + " " + message + "\r\n" + chatTextBox.Text;
+                            }));
+                           
+                        }
+
+                        else
+                        { 
+                            try
+                            {
+                                if (privatekey.Length == 0)
+                                {
+                                    MessageBox.Show("Bad private key...");
+                                    return;
+                                }
+                                else
+                                {
+                                    rsa.FromXmlString(privatekey);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                MessageBox.Show("Problem with RSA... \n" + ex.Message.ToString());
+                            }
+
+                            try
+                            {
+
+                                DecryptedData = rsa.Decrypt(data, false);
+                            }
+                            catch (CryptographicException ex)
+                            {
+                                MessageBox.Show("Crypto error... \n" + ex.Message.ToString());
+                                return;
+                            }
+
+                            string text = Encoding.UTF8.GetString(DecryptedData);
+
+                            for (int i = 0; i < data.Length - 1; i++)
+                            {
+                                data.SetValue((byte)0, i);
+                            }
+                            for (int i = 0; i < DecryptedData.Length - 1; i++)
+                            {
+                                DecryptedData.SetValue((byte)0, i);
+                            }
+
+                            // добавляем полученное сообщение в текстовое поле
+                            this.Invoke(new MethodInvoker(() =>
+                            {
+                                string time = DateTime.Now.ToShortTimeString();
+                                listBox2.Items.Add(time + " | " + text);
+                                //chatTextBox.Text = time + " " + message + "\r\n" + chatTextBox.Text;
+                            }));
+                        }
+                        
+                    }
+                    catch(Exception ex)
+                    {
+                        MessageBox.Show(ex.Message.ToString());
+                        return;
+                    }
+                    
+                }
+            }
+            catch (ObjectDisposedException)
+            {
+                if (!alive)
+                    return;
+                throw;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message);
+            }
+        }
+        
+
+        private void ExitChat()
+        {
+            string message = userName + " покидает чат";
+            byte[] data = Encoding.Unicode.GetBytes(message);
+            client.Send(data, data.Length, HOST, REMOTEPORT);
+            client.DropMulticastGroup(groupAddress);
+
+            alive = false;
+            client.Close();
+
+           
+        }
+
+        private void Form1_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            if (alive)
+                ExitChat();
+        }
+
+        private static string LocalIPAddress()
+        {
+            string localIP = "";
+            IPHostEntry host = Dns.GetHostEntry(Dns.GetHostName());
+            foreach (IPAddress ip in host.AddressList)
+            {
+                if (ip.AddressFamily == AddressFamily.InterNetwork)
+                {
+                    localIP = ip.ToString();
+                    break;
+                }
+            }
+            return localIP;
+        }
+
+        private void Form1_FormClosed(object sender, FormClosedEventArgs e)
+        {
+            // Application.Exit();
+        }
+
+        private void timer1_Tick(object sender, EventArgs e)
+        {
+            //listBox2.Items.Clear();
+            //listBox2.Items.AddRange(messages.ToArray());
+            //listBox2.Refresh();
+        }
+
+        private void button2_Click(object sender, EventArgs e)
+        {//подключиться
+            userName = textBox1.Text;
+           
+            try
+            {
+                client = new UdpClient(LOCALPORT);
+                // присоединяемся к групповой рассылке
+                client.JoinMulticastGroup(groupAddress, TTL);
+
+                // запускаем задачу на прием сообщений
+                Task receiveTask = new Task(ReceiveMessages);
+                receiveTask.Start();
+
+                // отправляем первое сообщение о входе нового пользователя
+                string message = userName + " вошел в чат";
+                //string pkey = Encoding(publicKey);
+
+                string messageIP = message + "(" + LocalIPAddress() + ";" + publickey + ")";
+                //string messageIP = message + "(" + ownIP + ";" + publicKey + ")";
+                byte[] data = Encoding.Unicode.GetBytes(messageIP);
+
+                client.Send(data, data.Length, HOST, REMOTEPORT);
+
+                // добавление нового сообщения в listbox
+                //listBox1.Items.Add(message);
+
+                
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message);
+            }
+
+        }
+    }
+}
